@@ -11,8 +11,10 @@ def get_query_results(search_string)
     url = URI.escape("http://#{$wikia_page}.wikia.com/api/v1/Search/List/?query=#{search_string}&limit=10")
     response = HTTParty.get(url)
     response.parsed_response["items"]
-  rescue Exception => e
-    []
+  rescue Telegram::Bot::Exceptions::ResponseError => e
+    if e.error_code.to_s == '502'
+      puts 'Telegram 502 error'
+    end
   end
 end
 
@@ -42,16 +44,22 @@ def create_inline_response(results_list)
 end
 
 Telegram::Bot::Client.run(token) do |bot|
-  bot.listen do |message|
-    case message
-    when Telegram::Bot::Types::InlineQuery
-      results = create_inline_response(get_query_results(message.query))
-      bot.api.answer_inline_query(inline_query_id: message.id, results: results)
+  begin
+    bot.listen do |message|
+      case message
+      when Telegram::Bot::Types::InlineQuery
+        results = create_inline_response(get_query_results(message.query))
+        bot.api.answer_inline_query(inline_query_id: message.id, results: results)
 
-    when Telegram::Bot::Types::Message
-      bot.api.send_message(
-        chat_id: message.chat.id, parse_mode: "Markdown", text: "Please send an inline query to me! E.g. `@#{$bot_name} Main Character`"
-      )
+      when Telegram::Bot::Types::Message
+        bot.api.send_message(
+          chat_id: message.chat.id, parse_mode: "Markdown", text: "Please send an inline query to me! E.g. `@#{$bot_name} Main Character`"
+        )
+      end
+    end
+  rescue Telegram::Bot::Exceptions::ResponseError => e
+    if e.error_code.to_s == '502'
+      puts 'Telegram 502 error'
     end
   end
 end
