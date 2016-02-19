@@ -1,35 +1,48 @@
 require 'telegram/bot'
 require 'httparty'
 require 'uri'
+require 'yaml'
 
-token = ENV['TAPI_TOKEN']
-$wikia_page = ENV['WIKIA_PAGE']
-$bot_name = ENV['BOT_NAME']
+config = YAML.load_file('secrets.yml')
+token = config['TOKEN']
+$wikia_page = config['WIKIA_PAGE']
+$bot_name = config['BOT_NAME']
 
 def get_query_results(search_string)
   url = URI.escape("http://#{$wikia_page}.wikia.com/api/v1/Search/List/?query=#{search_string}&limit=10")
   response = HTTParty.get(url)
   response.parsed_response['items']
-rescue Telegram::Bot::Exceptions::ResponseError => e
-  puts 'Telegram 502 error' if e.error_code.to_s == '502'
 end
 
-def get_article_abstract_thumbnail(id)
-  response = HTTParty.get("http://#{$wikia_page}.wikia.com/api/v1/Articles/Details/?ids=#{id}&abstract=100")
-  item = response.parsed_response["items"]["#{id}"]
-  return item['abstract'], item['thumbnail']
-rescue
-  return nil, nil
+def get_article_info(id_list)
+  return [] if id_list.empty?
+  response = HTTParty.get("http://#{$wikia_page}.wikia.com/api/v1/Articles/Details/?ids=#{id_list.join(',')}&abstract=100")
+  abstract_thumbnail_list = []
+  id_list.each_with_index do |id, index|
+    article = response['items'].values[index]
+    if !(article.nil?)
+      abstract_thumbnail_list.push(
+        title: article['title'],
+        abstract: article['abstract'],
+        thumbnail: article['thumbnail'],
+        url: "#{$wikia_page}.wikia.com#{article['url']}"
+      )
+    end
+  end
+  abstract_thumbnail_list
 end
 
-def create_inline_response(results_list)
+def create_inline_response(query)
+  results_list = get_query_results(query)
   return [] if results_list.nil?
+  result_id_list = results_list.map { |result| result['id'] }
+  abstract_thumbnail_list = get_article_info(result_id_list)
   begin
-    results_list.each_with_index.map do |result, i|
-      abstract, thumbnail = get_article_abstract_thumbnail(result['id'])
+    abstract_thumbnail_list.map.with_index do |item, i|
       Telegram::Bot::Types::InlineQueryResultArticle.new(
-        id: i, title: result['title'], url: result['url'],
-        message_text: result['url'], description: abstract, thumb_url: thumbnail
+        id: i, title: item[:title], url: item[:url],
+        message_text: item[:url], description: item[:abstract],
+        thumb_url: item[:thumbnail]
       )
     end
   rescue
@@ -42,7 +55,7 @@ Telegram::Bot::Client.run(token) do |bot|
     bot.listen do |message|
       case message
       when Telegram::Bot::Types::InlineQuery
-        results = create_inline_response(get_query_results(message.try(:query)))
+        results = create_inline_response(message.query)
         bot.api.answer_inline_query(inline_query_id: message.id, results: results)
       when Telegram::Bot::Types::Message
         bot.api.send_message(
@@ -52,5 +65,8 @@ Telegram::Bot::Client.run(token) do |bot|
     end
   rescue Telegram::Bot::Exceptions::ResponseError => e
     puts 'Telegram 502 error' if e.error_code.to_s == '502'
+    retry
+  rescue
+    retry
   end
 end
